@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "62977450893",
+    "project_id": "journiq-b4c9f",
+    "storage_bucket": "journiq-b4c9f.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:62977450893:android:0b1b75ce76e4f556b693c4",
+        "android_client_info": {
+          "package_name": "com.journiq"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "62977450893-0gkuep2re4tsm8vecjaor37rpl294p30.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.journiq",
+            "certificate_hash": "5e8f16062ea3cd2c4a0d547876baa6f38cabf625"
+          }
+        },
+        {
+          "client_id": "62977450893-prnndp73i5hggs2bbnaplspq4r85me2r.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyB-S0Lbv6XICS_qVSHoIV39fcEFSU2DXDg"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "62977450893-prnndp73i5hggs2bbnaplspq4r85me2r.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
