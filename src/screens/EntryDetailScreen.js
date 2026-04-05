@@ -2,6 +2,9 @@ import React from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, StatusBar, Dimensions } from 'react-native';
 import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../hooks/useTheme';
+import { deleteStory } from '../services/firestoreService';
+import { Alert } from 'react-native';
+
 
 const { width } = Dimensions.get('window');
 
@@ -10,12 +13,45 @@ const EntryDetailScreen = ({ navigation, route }) => {
   const styles = createStyles(theme, isDarkMode);
   const { entry } = route.params || {};
 
-  const renderInfoChip = (icon, label) => (
-    <View style={styles.infoChip}>
-      <MaterialCommunityIcons name={icon} size={16} color={theme.colors.primary} style={{ marginRight: 6 }} />
-      <Text style={styles.infoChipText}>{label}</Text>
-    </View>
-  );
+  const handleDelete = () => {
+    Alert.alert(
+      "Delete Journey",
+      "Are you sure you want to erase this memory forever?",
+      [
+        { text: "Cancel", style: "cancel" },
+        { 
+          text: "Delete", 
+          style: "destructive", 
+          onPress: async () => {
+            try {
+              await deleteStory(entry.id);
+              navigation.goBack();
+            } catch (err) {
+              console.error('Delete failed:', err);
+              Alert.alert('Error', 'Could not delete the journey. Please try again.');
+            }
+          }
+        }
+      ]
+    );
+  };
+
+
+  const renderInfoChip = (icon, label) => {
+    // 🔥 FIX: Ensure the label (like the date) is a string, not a Firestore Timestamp object
+    const displayLabel = 
+      (label && typeof label === 'object' && label.toDate) ? label.toDate().toLocaleDateString() :
+      (label && typeof label === 'object' && label._seconds) ? new Date(label._seconds * 1000).toLocaleDateString() :
+      label?.toString() || 'Today';
+
+    return (
+      <View style={styles.infoChip}>
+        <MaterialCommunityIcons name={icon} size={16} color={theme.colors.primary} style={{ marginRight: 6 }} />
+        <Text style={styles.infoChipText}>{displayLabel}</Text>
+      </View>
+    );
+  };
+
 
   const titleParts = entry?.title?.split(' ') || ['New', 'Journey'];
   const mainTitle = titleParts.slice(0, -2).join(' ') || '';
@@ -40,7 +76,7 @@ const EntryDetailScreen = ({ navigation, route }) => {
               <TouchableOpacity style={styles.actionButtonGlass} onPress={() => navigation.navigate('AddEntry', { entry })}>
                 <MaterialCommunityIcons name="pencil-outline" size={24} color="#FFF" />
               </TouchableOpacity>
-              <TouchableOpacity style={styles.actionButtonGlass}>
+              <TouchableOpacity style={styles.actionButtonGlass} onPress={handleDelete}>
                 <MaterialCommunityIcons name="trash-can-outline" size={24} color="#FFF" />
               </TouchableOpacity>
             </View>

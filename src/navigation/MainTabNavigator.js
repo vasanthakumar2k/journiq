@@ -61,7 +61,7 @@ const MainTabNavigator = () => {
         }}
       />
       <Tab.Screen
-        name="ProfileTab"
+        name="Profile"
         component={ProfileScreen}
         options={{
           tabBarIcon: (props) => <TabBarIcon name="account-outline" theme={theme} {...props} />,

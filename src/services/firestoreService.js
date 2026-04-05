@@ -1,4 +1,19 @@
-import firestore from '@react-native-firebase/firestore';
+import firestore, { 
+  getFirestore, 
+  collection, 
+  doc, 
+  setDoc, 
+  addDoc, 
+  getDocs, 
+  query, 
+  where, 
+  orderBy, 
+  serverTimestamp,
+  updateDoc,
+  deleteDoc,
+} from '@react-native-firebase/firestore';
+
+const db = getFirestore();
 
 /**
  * Creates or updates a user profile in Firestore after Google Login.
@@ -6,17 +21,14 @@ import firestore from '@react-native-firebase/firestore';
  */
 export const createUser = async (user) => {
   try {
-    const userId = user.id || user.uid; // Google Sign-In uses .id, Firebase Auth uses .uid
+    const userId = user.id || user.uid;
     
-    await firestore()
-      .collection('users')
-      .doc(userId)
-      .set({
-        name: user.name,
-        email: user.email,
-        photo: user.photo,
-        lastLogin: firestore.FieldValue.serverTimestamp(),
-      }, { merge: true });
+    await setDoc(doc(db, 'users', userId), {
+      name: user.name,
+      email: user.email,
+      photo: user.photo,
+      lastLogin: serverTimestamp(),
+    }, { merge: true });
     
     console.log("User record synced with Firestore for UID:", userId);
   } catch (error) {
@@ -26,35 +38,30 @@ export const createUser = async (user) => {
 };
 
 /**
- * Adds a new journal entry (story) to the user's stories subcollection.
- * @param {string} userId - The unique user ID.
+ * Adds a new journal entry (story) to the standalone 'stories' collection.
+ * @param {string} userId - The unique user ID of the creator.
  * @param {Object} storyData - The journal entry data.
  */
 export const addStory = async (userId, storyData) => {
   try {
-    const { title, images, location, narrative, tags } = storyData;
+    const { title, images, location, narrative, tags, email } = storyData;
     
-    // Data Mapping as requested:
-    // 1. First image as bannerImage
-    // 2. Others as gallery array
     const bannerImage = images && images.length > 0 ? images[0] : null;
     const gallery = images && images.length > 1 ? images.slice(1) : [];
 
-    const result = await firestore()
-      .collection('users')
-      .doc(userId)
-      .collection('stories')
-      .add({
-        title,
-        bannerImage,
-        gallery,
-        location,
-        narrative,
-        tags,
-        createdAt: firestore.FieldValue.serverTimestamp(),
-      });
+    const result = await addDoc(collection(db, 'stories'), {
+      userId,
+      email: email || '',
+      title,
+      bannerImage,
+      gallery,
+      location,
+      narrative,
+      tags,
+      createdAt: serverTimestamp(),
+    });
     
-    console.log("Journal entry successfully saved to Firestore with ID:", result.id);
+    console.log("Journal entry successfully saved to global stories collection with ID:", result.id);
     return result.id;
   } catch (error) {
     console.error("Error adding story to Firestore:", error);
@@ -63,79 +70,79 @@ export const addStory = async (userId, storyData) => {
 };
 
 /**
- * Fetches all stories for a specific user.
+ * Fetches all stories from the global 'stories' collection filtered by email.
+ * @param {string} userEmail - The user's email address.
  */
-export const getUserStories = async (userId) => {
+export const getUserStories = async (userEmail) => {
   try {
-    const snapshot = await firestore()
-      .collection('users')
-      .doc(userId)
-      .collection('stories')
-      .orderBy('createdAt', 'desc')
-      .get();
+    const q = query(
+      collection(db, 'stories'),
+      where('email', '==', userEmail),
+      orderBy('createdAt', 'desc')
+    );
+    
+    const snapshot = await getDocs(q);
 
     return snapshot.docs.map(doc => ({
       id: doc.id,
       ...doc.data(),
     }));
   } catch (error) {
-    console.error("Error fetching user stories:", error);
+    console.error("Error fetching user stories from root collection:", error);
     throw error;
   }
 };
 
 /**
- * Fetches ALL stories across all users using Collection Group.
+ * Fetches ALL stories across all users from the global 'stories' collection.
  */
 export const getAllStories = async () => {
   try {
-    const snapshot = await firestore()
-      .collectionGroup('stories')
-      .orderBy('createdAt', 'desc')
-      .get();
+    const q = query(
+      collection(db, 'stories'),
+      orderBy('createdAt', 'desc')
+    );
+    
+    const snapshot = await getDocs(q);
 
     return snapshot.docs.map(doc => ({
       id: doc.id,
       ...doc.data(),
     }));
   } catch (error) {
-    console.error("Error performing collectionGroup query:", error);
+    console.error("Error fetching all stories from global collection:", error);
     throw error;
   }
 };
 
 /**
- * Updates an existing story.
+ * Updates an existing story in the root stories collection.
  */
-export const updateStory = async (userId, storyId, data) => {
+export const updateStory = async (storyId, data) => {
   try {
-    await firestore()
-      .collection('users')
-      .doc(userId)
-      .collection('stories')
-      .doc(storyId)
-      .update(data);
+    const storyDocRef = doc(db, 'stories', storyId);
+    await updateDoc(storyDocRef, data);
     return true;
   } catch (error) {
-    console.error("Error updating story:", error);
+    console.error("Error updating story in root collection:", error);
     throw error;
   }
 };
 
 /**
- * Deletes a story.
+ * Deletes a story from the root stories collection.
  */
-export const deleteStory = async (userId, storyId) => {
+export const deleteStory = async (storyId) => {
   try {
-    await firestore()
-      .collection('users')
-      .doc(userId)
-      .collection('stories')
-      .doc(storyId)
-      .delete();
+    const storyDocRef = doc(db, 'stories', storyId);
+    await deleteDoc(storyDocRef);
     return true;
   } catch (error) {
-    console.error("Error deleting story:", error);
+    console.error("Error deleting story from root collection:", error);
     throw error;
   }
 };
+
+
+
+

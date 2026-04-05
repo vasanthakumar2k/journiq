@@ -1,35 +1,75 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
 import { View, Text, StyleSheet, TextInput, FlatList, TouchableOpacity, Image, StatusBar, ScrollView, ImageBackground } from 'react-native';
 import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../hooks/useTheme';
-import { searchLocalEntries } from '../services/journalService';
+import { getAllStories } from '../services/firestoreService';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+
 
 const SearchScreen = ({ navigation }) => {
   const { theme, isDarkMode } = useTheme();
   const styles = createStyles(theme, isDarkMode);
   const [searchQuery, setSearchQuery] = useState('');
   const [results, setResults] = useState([]);
+  const [userPhoto, setUserPhoto] = useState('https://i.pravatar.cc/100');
+
+  useEffect(() => {
+    AsyncStorage.getItem('userSession').then(s => {
+      if (s) {
+        const session = JSON.parse(s);
+        if (session.photo) setUserPhoto(session.photo);
+      }
+    });
+  }, []);
 
   const handleSearch = useCallback(async (query) => {
     try {
-      const data = await searchLocalEntries(query);
-      // Map DB entries to the 'standard' card type for the search UI
-      const formatted = data.map(item => ({
-        ...item,
-        type: 'standard',
-        tag: item.tags?.[0] || 'JOURNAL',
-        image: item.images?.[0] || 'https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?q=80&w=2070',
-        stats: { views: 0, comments: 0 }
-      }));
+      const sessionStr = await AsyncStorage.getItem('userSession');
+      if (!sessionStr) return;
+      
+      const firestoreData = await getAllStories();
+
+      
+      // Local filtering for the query
+      const filtered = firestoreData.filter(item => 
+        item.title?.toLowerCase().includes(query.toLowerCase()) ||
+        item.location?.toLowerCase().includes(query.toLowerCase()) ||
+        item.narrative?.toLowerCase().includes(query.toLowerCase())
+      );
+
+      const formatted = filtered.map(story => {
+        const storyImages = story.images || [story.bannerImage, ...(story.gallery || [])].filter(Boolean);
+
+        return {
+          id: story.id,
+          title: story.title,
+          location: story.location || '',
+          date: story.createdAt?.toDate?.().toLocaleDateString() || (story.createdAt ? new Date(story.createdAt).toLocaleDateString() : 'Today'),
+          tags: story.tags || [],
+          images: storyImages,
+          image: storyImages[0] || 'https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?q=80&w=2070',
+          narrative: story.narrative || '',
+          type: 'standard',
+          tag: story.tags?.[0] || 'JOURNAL',
+          stats: { views: Math.floor(Math.random() * 100), comments: Math.floor(Math.random() * 10) }
+        };
+      });
+
+
       setResults(formatted);
     } catch (error) {
       console.error("Search error:", error);
     }
   }, []);
 
-  useEffect(() => {
-    handleSearch(searchQuery);
-  }, [searchQuery, handleSearch]);
+
+  useFocusEffect(
+    useCallback(() => {
+      handleSearch(searchQuery);
+    }, [searchQuery, handleSearch])
+  );
 
   const filters = [
     { id: '1', label: 'All Filters', icon: 'tune-variant', active: true },
@@ -101,15 +141,11 @@ const SearchScreen = ({ navigation }) => {
     <View style={styles.container}>
       <StatusBar barStyle={isDarkMode ? "light-content" : "dark-content"} backgroundColor={theme.colors.background} />
       
-      {/* Top Header */}
+      {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity>
-          <MaterialCommunityIcons name="menu" size={24} color={theme.colors.text} />
-        </TouchableOpacity>
+        <View style={{ width: 24 }} /> 
         <Text style={styles.headerTitle}>Journiq</Text>
-        <TouchableOpacity onPress={() => navigation.navigate('Profile')}>
-          <Image source={{ uri: 'https://i.pravatar.cc/100' }} style={styles.avatar} />
-        </TouchableOpacity>
+        <View style={{ width: 24 }} /> 
       </View>
 
       <FlatList

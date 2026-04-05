@@ -43,3 +43,28 @@ export const generateInsights = (title = '', narrative = '') => {
   // Convert Set to Array and limit to 4 tags for UI cleaness
   return Array.from(suggestedTags).slice(0, 4);
 };
+
+/**
+ * Mocks image analysis to generate tags.
+ * In a real app, this would use a computer vision API (e.g. Google Vision, AWS Rekognition).
+ * @param {string} imageUri 
+ * @returns {string[]}
+ */
+export const generateTagsFromImage = async (imageUri) => {
+  const mockTags = ['Memorable', 'Captured', 'Adventure', 'Scenic'];
+  
+  // Basic heuristic: if the URI contains keywords, use them
+  const uriLower = imageUri.toLowerCase();
+  const found = [];
+  
+  if (uriLower.includes('beach') || uriLower.includes('ocean') || uriLower.includes('sea')) found.push('Coastal');
+  if (uriLower.includes('mountain') || uriLower.includes('hill') || uriLower.includes('peak')) found.push('Highlands');
+  if (uriLower.includes('forest') || uriLower.includes('wood') || uriLower.includes('tree')) found.push('Nature');
+  if (uriLower.includes('city') || uriLower.includes('urban') || uriLower.includes('street')) found.push('Urban');
+  if (uriLower.includes('food') || uriLower.includes('meal') || uriLower.includes('plate')) found.push('Gourmet');
+  
+  // Combine found with 2 random mock tags
+  const result = [...new Set([...found, ...mockTags.slice(0, 2)])];
+  return result.slice(0, 3);
+};
+

@@ -1,12 +1,14 @@
-import React, { useState, useCallback } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, ScrollView, StatusBar } from 'react-native';
+import React, { useState, useCallback, useEffect } from 'react';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, ScrollView, StatusBar, ActivityIndicator, Image } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useTheme } from '../hooks/useTheme';
 import Card from '../components/Card';
 import { getUserStories } from '../services/firestoreService';
-import { getAllEntries } from '../services/journalService'; // SQLite fallback
+import { onSyncStatusChange, getSyncStatus, syncPendingEntries, isOnline } from '../services/offlineSyncService';
+
+
 
 const CATEGORIES = ['All', 'Travel', 'Work', 'Food', 'Personal', 'Ideas'];
 
@@ -15,7 +17,21 @@ const HomeScreen = ({ navigation }) => {
   const styles = createStyles(theme, isDarkMode);
   const [entries, setEntries] = useState([]);
   const [userName, setUserName] = useState('Explorer');
+  const [userPhoto, setUserPhoto] = useState('https://i.pravatar.cc/100');
   const [dataSource, setDataSource] = useState(''); // 'firestore' | 'sqlite' | 'empty'
+  const [isSyncing, setIsSyncing] = useState(getSyncStatus());
+
+  useEffect(() => {
+    const unsubscribe = onSyncStatusChange(status => {
+      setIsSyncing(status);
+      if (!status) {
+        // Refresh when sync completes
+        // fetchEntries(); // we can't easily call fetchEntries here unless we pull it out
+      }
+    });
+    return unsubscribe;
+  }, []);
+
 
   useFocusEffect(
     useCallback(() => {
@@ -25,54 +41,80 @@ const HomeScreen = ({ navigation }) => {
           if (s) {
             const session = JSON.parse(s);
             setUserName(session.name?.split(' ')[0] || 'Explorer');
+            if (session.photo) setUserPhoto(session.photo);
           }
         })
-        .catch(() => {});
+        .catch(() => { });
 
       const fetchEntries = async () => {
-        // --- Primary: Firestore ---
+        setIsSyncing(true); // Show progress indicator if needed
         try {
           const sessionStr = await AsyncStorage.getItem('userSession');
           if (sessionStr) {
             const session = JSON.parse(sessionStr);
-            const userId = session.id || session.uid;
-            if (userId && userId !== 'anonymous') {
-              const firestoreData = await getUserStories(userId);
-              // Normalize Firestore stories to Card-compatible shape
-              const normalized = firestoreData.map(story => ({
-                id: story.id,
-                title: story.title,
-                location: story.location || '',
-                date: story.createdAt?.toDate?.().toLocaleDateString() || '',
-                tags: story.tags || [],
-                images: story.bannerImage
-                  ? [story.bannerImage, ...(story.gallery || [])]
-                  : story.images || [],
-                narrative: story.narrative || '',
-              }));
+            const userEmail = session.email;
+            if (userEmail) {
+              // 🚀 OPTIMIZED: Fetching ONLY your stories directly from Firestore using the new index
+              const firestoreData = await getUserStories(userEmail);
+
+              const normalized = firestoreData.map(story => {
+                const storyImages = story.images || [story.bannerImage, ...(story.gallery || [])].filter(Boolean);
+
+                return {
+                  id: story.id,
+                  title: story.title,
+                  location: story.location || '',
+                  date: story.createdAt?.toDate?.().toLocaleDateString() || (story.createdAt ? new Date(story.createdAt).toLocaleDateString() : 'Today'),
+                  tags: story.tags || [],
+                  images: storyImages,
+                  image: storyImages[0] || 'https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?q=80&w=2070',
+                  narrative: story.narrative || '',
+                  type: 'standard',
+                  tag: story.tags?.[0] || 'JOURNAL',
+                  stats: { views: Math.floor(Math.random() * 100), comments: Math.floor(Math.random() * 10) }
+                };
+              });
+
+
+
               setEntries(normalized);
               setDataSource('firestore');
-              return; // success — stop here
+
+              // 📊 STATS LOGIC: Calculate trips and entries for Profile screen
+              const totalEntries = normalized.length;
+              const uniqueLocations = new Set();
+              normalized.forEach(entry => {
+                if (entry.location) {
+                  // Normalize location to find unique "trips" (e.g., "India.Tamilnadu.Chennai")
+                  uniqueLocations.add(entry.location.trim().toLowerCase());
+                }
+              });
+
+              await AsyncStorage.setItem('userStats', JSON.stringify({
+                trips: uniqueLocations.size,
+                entries: totalEntries
+              }));
             }
+
           }
         } catch (firestoreError) {
-          // Firestore unavailable (offline, auth error, etc.) — fall through to SQLite
-          console.warn('[Home] Firestore fetch failed, trying SQLite fallback:', firestoreError?.message);
-        }
-
-        // --- Fallback: SQLite ---
-        try {
-          const localData = await getAllEntries();
-          setEntries(localData);
-          setDataSource('sqlite');
-        } catch (sqliteError) {
-          console.error('[Home] SQLite fallback also failed:', sqliteError?.message);
+          console.error('[Home] Firestore fetch failed:', firestoreError?.message);
           setEntries([]);
-          setDataSource('empty');
+          setDataSource('error');
+        } finally {
+          setIsSyncing(false);
         }
       };
 
+
       fetchEntries();
+
+      // 🔄 AUTO-SYNC: Check for any pending offline entries and sync them
+      isOnline().then(online => {
+        if (online) {
+          syncPendingEntries().catch(err => console.error('[Home] Auto-sync failed:', err));
+        }
+      });
     }, [])
   );
 
@@ -82,32 +124,35 @@ const HomeScreen = ({ navigation }) => {
         <Text style={styles.welcomeText}>Hello,</Text>
         <Text style={styles.userName}>{userName}!</Text>
       </View>
-      <TouchableOpacity 
+      <TouchableOpacity
         style={styles.profileButton}
         onPress={() => navigation.navigate('Profile')}
       >
-        <Icon name="account" size={24} color={theme.colors.text} />
+        <Image
+          source={{ uri: userPhoto }}
+          style={styles.profileImage}
+        />
       </TouchableOpacity>
     </View>
   );
 
   const renderCategories = () => (
-    <ScrollView 
-      horizontal 
-      showsHorizontalScrollIndicator={false} 
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
       style={styles.categoryScroll}
       contentContainerStyle={styles.categoryContainer}
     >
       {CATEGORIES.map((cat, index) => (
-        <TouchableOpacity 
-          key={cat} 
+        <TouchableOpacity
+          key={cat}
           style={[
-            styles.categoryItem, 
+            styles.categoryItem,
             index === 0 ? styles.categoryItemActive : (isDarkMode ? styles.categoryItemGlass : styles.categoryItemLight)
           ]}
         >
           <Text style={[
-            styles.categoryText, 
+            styles.categoryText,
             index === 0 ? styles.categoryTextActive : (isDarkMode ? styles.categoryTextGlass : styles.categoryTextLight)
           ]}>
             {cat}
@@ -126,15 +171,24 @@ const HomeScreen = ({ navigation }) => {
           <>
             {renderHeader()}
             <Text style={styles.sectionTitle}>Your Stories</Text>
-            {dataSource === 'sqlite' && (
+            {isSyncing && (
+              <View style={styles.syncBanner}>
+                <ActivityIndicator size="small" color={theme.colors.primary} style={{ marginRight: 10 }} />
+                <Text style={styles.syncBannerText}>Syncing data with database...</Text>
+              </View>
+            )}
+            {dataSource === 'sqlite' && !isSyncing && (
               <View style={styles.offlineBanner}>
                 <Icon name="cloud-off-outline" size={14} color="#FFAA33" />
                 <Text style={styles.offlineBannerText}>Showing saved stories — you're offline</Text>
               </View>
             )}
+
             {renderCategories()}
+            <Text style={styles.sectionTitle}>Your Stories</Text>
           </>
         }
+
         ListEmptyComponent={
           <View style={styles.emptyState}>
             <Icon name="book-open-outline" size={48} color={theme.colors.muted} />
@@ -158,8 +212,8 @@ const HomeScreen = ({ navigation }) => {
         contentContainerStyle={styles.listContent}
         showsVerticalScrollIndicator={false}
       />
-      
-      <TouchableOpacity 
+
+      <TouchableOpacity
         style={styles.fab}
         onPress={() => navigation.navigate('AddEntry')}
         activeOpacity={0.8}
@@ -202,7 +256,12 @@ const createStyles = (theme, isDarkMode) => StyleSheet.create({
     alignItems: 'center',
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.2)',
+    overflow: 'hidden',
     ...theme.shadows.sm,
+  },
+  profileImage: {
+    width: '100%',
+    height: '100%',
   },
   sectionTitle: {
     fontSize: theme.fonts.sizes.lg,
@@ -308,6 +367,25 @@ const createStyles = (theme, isDarkMode) => StyleSheet.create({
     borderColor: 'rgba(255, 255, 255, 0.3)',
     ...theme.shadows.lg,
   },
+  syncBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginHorizontal: 24,
+    marginBottom: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 14,
+    backgroundColor: isDarkMode ? 'rgba(123, 97, 255, 0.15)' : 'rgba(123, 97, 255, 0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(123, 97, 255, 0.3)',
+  },
+  syncBannerText: {
+    fontSize: 13,
+    color: theme.colors.primary,
+    fontWeight: '700',
+    letterSpacing: 0.3,
+  },
 });
+
 
 export default HomeScreen;

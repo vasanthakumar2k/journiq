@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Image, StatusBar, ActivityIndicator, Alert, PermissionsAndroid, Platform, Modal } from 'react-native';
 import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
 import DraggableFlatList, { ScaleDecorator } from 'react-native-draggable-flatlist';
@@ -6,38 +6,59 @@ import { launchImageLibrary } from 'react-native-image-picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useTheme } from '../hooks/useTheme';
 import { uploadToS3 } from '../services/s3Service';
-import { addStory } from '../services/firestoreService';
+import { addStory, updateStory } from '../services/firestoreService';
 import { isOnline, saveOffline } from '../services/offlineSyncService';
 import Geolocation from 'react-native-geolocation-service';
 import { requestMediaLibraryPermission, requestLocationPermission } from '../utils/permissionHelper';
-import { generateInsights } from '../services/aiService';
+import { generateInsights, generateTagsFromImage } from '../services/aiService';
 
 const AddEntryScreen = ({ navigation, route }) => {
-  const { entry } = route.params || {};
+
   const { theme, isDarkMode } = useTheme();
-  const styles = createStyles(theme, isDarkMode);
   
-  const [title, setTitle] = useState(entry?.title || '');
-  const [narrative, setNarrative] = useState(entry?.narrative || '');
+  // Memoize styles to prevent expensive StyleSheet.create calls every render
+  const styles = useMemo(() => createStyles(theme, isDarkMode), [theme, isDarkMode]);
+
+  const [title, setTitle] = useState('');
+  const [narrative, setNarrative] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [alertConfig, setAlertConfig] = useState({ visible: false, title: '', message: '', type: 'info', onPress: null });
-  
-  // Initialize with empty array for a clean start or use entry images
-  const [images, setImages] = useState(entry?.images?.map((uri, index) => ({
-    id: `img-${Date.now()}-${index}`,
-    uri: uri,
-    isS3: uri.startsWith('http'),
-  })) || []);
-  const [tags, setTags] = useState(entry?.tags || ['Exploring', 'Adventure']);
-  const [location, setLocation] = useState(entry?.location || 'Fetching location...');
+
+  const [images, setImages] = useState([]);
+  const [tags, setTags] = useState(['Exploring', 'Adventure']);
+  const [location, setLocation] = useState('Fetching location...');
   const [isEditingLocation, setIsEditingLocation] = useState(false);
+  const editingEntry = route.params?.entry || null;
 
   useEffect(() => {
-    fetchLocation();
-  }, []);
+    if (editingEntry) {
+      setTitle(editingEntry.title || '');
+      setNarrative(editingEntry.narrative || '');
+      setLocation(editingEntry.location || '');
+      setTags(editingEntry.tags || []);
+      if (editingEntry.images) {
+        setImages(editingEntry.images.map((uri, index) => ({
+          id: `existing-${index}`,
+          uri,
+          isS3: uri.startsWith('http'),
+          isUploading: false
+        })));
+      }
+    } else {
+      fetchLocation();
+    }
+  }, [editingEntry]);
+
 
   const fetchLocation = async () => {
+    const online = await isOnline();
+    if (!online) {
+      setLocation('');
+      setIsEditingLocation(true);
+      return;
+    }
+
     const hasPermission = await requestLocationPermission();
     if (!hasPermission) {
       setLocation('Location permission denied');
@@ -47,26 +68,25 @@ const AddEntryScreen = ({ navigation, route }) => {
     Geolocation.getCurrentPosition(
       (position) => {
         const { latitude, longitude } = position.coords;
-        // In a real app, you'd use reverse geocoding here. 
-        // For now, we'll show coordinates or a fallback.
-        setLocation(`${latitude.toFixed(4)}, ${longitude.toFixed(4)}`);
-        
-        // Optional: Use a free reverse geocoding API if possible, or just stay with coords
+        // Format for reverse geocoding
         fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}`)
           .then(res => res.json())
           .then(data => {
             if (data.display_name) {
               const address = data.address;
               const city = address.city || address.town || address.village || '';
+              const state = address.state || address.region || '';
               const country = address.country || '';
-              setLocation(`${city}${city && country ? ', ' : ''}${country}` || 'Unknown Location');
+              // Formatting as Country.State.City (requested format)
+              let formatted = [country, state, city].filter(Boolean).join('.');
+              setLocation(formatted || 'India.Tamilnadu.Coimbatore');
             }
           })
-          .catch(() => console.log('Reverse geocoding failed'));
+          .catch(() => setLocation('India.Tamilnadu.Coimbatore'));
       },
       (error) => {
         console.warn(error);
-        setLocation('Bali, Indonesia'); // Fallback
+        setLocation('India.Tamilnadu.Coimbatore');
       },
       { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 }
     );
@@ -84,37 +104,6 @@ const AddEntryScreen = ({ navigation, route }) => {
     setAlertConfig({ visible: true, title, message, type, onPress });
   };
 
-  const requestPermissions = async () => {
-    if (Platform.OS === 'android') {
-      try {
-        const permissions = [];
-        
-        if (Platform.Version >= 33) {
-          permissions.push(PermissionsAndroid.PERMISSIONS.READ_MEDIA_IMAGES);
-        } else {
-          permissions.push(PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE);
-        }
-        permissions.push(PermissionsAndroid.PERMISSIONS.CAMERA);
-
-        const grants = await PermissionsAndroid.requestMultiple(permissions);
-
-        const allGranted = permissions.every(p => grants[p] === PermissionsAndroid.RESULTS.GRANTED);
-
-        if (allGranted) {
-          console.log('Permissions granted');
-          return true;
-        } else {
-          showAlert('Permissions Required', 'We need access to your photos to add them to your journey.', 'warning');
-          return false;
-        }
-      } catch (err) {
-        console.warn(err);
-        return false;
-      }
-    }
-    return true;
-  };
-
   const pickImage = async () => {
     const hasPermission = await requestMediaLibraryPermission();
 
@@ -127,83 +116,62 @@ const AddEntryScreen = ({ navigation, route }) => {
       return;
     }
 
-    launchGallery();
+    // SMALL DELAY: Important for Android lifecycle after permission grant to avoid picker closing immediately
+    if (Platform.OS === 'android') {
+      await new Promise(resolve => setTimeout(resolve, 300));
+    }
+
+    await launchGallery();
   };
 
   const launchGallery = async () => {
-    const result = await launchImageLibrary({
-      mediaType: 'photo',
-      includeBase64: true,
-      maxHeight: 800,
-      maxWidth: 800,
-      quality: 0.8,
-      selectionLimit: 1,
-    });
-
-    if (result.didCancel) {
-      console.log('User cancelled image picker');
-    } else if (result.errorCode) {
-      showAlert('Error', result.errorMessage || 'Something went wrong while picking the image.', 'error');
-    } else if (result.assets && result.assets.length > 0) {
-      const asset = result.assets[0];
-      handleUpload(asset);
-    }
-  };
-
-  const handleUpload = async (asset) => {
-    setIsUploading(true);
-
-    // Immediately show a local preview — always, regardless of network
-    const localImage = {
-      id: `local-${Date.now()}`,
-      uri: asset.uri,
-      base64: asset.base64 || null, // Store for later S3 upload if offline
-      isUploading: true,
-      isS3: false,
-    };
-    setImages(prev => [...prev, localImage]);
-
     try {
-      const online = await isOnline();
+      const result = await launchImageLibrary({
+        mediaType: 'photo',
+        includeBase64: true,
+        maxHeight: 1200,
+        maxWidth: 1200,
+        quality: 0.8,
+        selectionLimit: 0, // 0 means multiple selection
+      });
 
-      if (!online) {
-        // OFFLINE: Keep image as local URI — no S3 push
-        console.log('[AddEntry] Offline: storing image locally, skipping S3.');
-        setImages(prev => prev.map(img =>
-          img.id === localImage.id
-            ? { ...img, isUploading: false, isOffline: true }
-            : img
-        ));
+      if (result.didCancel) {
+        console.log('[AddEntry] User cancelled image picker');
         return;
       }
 
-      // ONLINE: Upload to S3 now
-      console.log('[AddEntry] Online: uploading image to S3...');
-      const s3Url = await uploadToS3(
-        asset.uri,
-        asset.fileName || `entry_${Date.now()}.jpg`,
-        asset.type || 'image/jpeg',
-        asset.base64,
-      );
+      if (result.errorCode) {
+        console.error('[AddEntry] ImagePicker Error:', result.errorMessage);
+        showAlert('Error', result.errorMessage || 'Something went wrong while picking the image.', 'error');
+        return;
+      }
 
-      console.log('[AddEntry] S3 URL:', s3Url);
-      setImages(prev => prev.map(img =>
-        img.id === localImage.id
-          ? { ...img, uri: s3Url, isS3: true, isUploading: false, base64: null }
-          : img
-      ));
-    } catch (error) {
-      console.error('[AddEntry] Upload failed:', error?.message || error);
-      // Keep the local image but mark upload failed — never crash
-      setImages(prev => prev.map(img =>
-        img.id === localImage.id
-          ? { ...img, isUploading: false, uploadFailed: true }
-          : img
-      ));
-    } finally {
-      setIsUploading(false);
+      if (result.assets && result.assets.length > 0) {
+        const newImages = result.assets.map(asset => ({
+          id: `local-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          uri: asset.uri,
+          isS3: false,
+          isUploading: false,
+          base64: asset.base64,
+          asset: asset
+        }));
+
+        setImages(prev => [...prev, ...newImages]);
+
+        // Trigger AI tagging if this was the first batch
+        generateTagsFromImage(result.assets[0].uri).then(suggestedTags => {
+          if (suggestedTags && suggestedTags.length > 0) {
+            setTags(prev => [...new Set([...prev, ...suggestedTags])].slice(0, 5));
+          }
+        });
+      }
+    } catch (err) {
+      console.error('[AddEntry] launchGallery failed:', err);
     }
   };
+
+  // handleUpload is removed as we now upload sequentially on Save
+
 
   const handleSave = async () => {
     if (!title.trim()) {
@@ -230,52 +198,75 @@ const AddEntryScreen = ({ navigation, route }) => {
           base64: img.base64 || null,
           isS3: img.isS3 || false,
         })),
+        createdAt: new Date().toISOString(),
+        email: user.email, // Include email for global collection filtering
       };
 
       // 3. Check connectivity
       const online = await isOnline();
-
       if (!online) {
-        // OFFLINE: save to SQLite, no S3 push
+        // OFFLINE SAVE: Store in MMKV and navigate back
         await saveOffline(storyData, user);
-        showAlert(
-          'Saved Offline',
-          'No internet connection. Your journey was saved locally and will sync automatically when you come back online.',
-          'info',
-        );
-      } else {
-        // ONLINE: push images (if any still local) then save to Firestore
-        const uploadedImages = [];
-        for (const img of storyData.images) {
-          if (img.isS3) {
-            // Already on S3
-            uploadedImages.push(img.uri);
-          } else {
-            try {
-              const s3Url = await uploadToS3(
-                img.uri,
-                `entry_${Date.now()}.jpg`,
-                'image/jpeg',
-                img.base64,
-              );
-              uploadedImages.push(s3Url);
-            } catch (uploadErr) {
-              console.warn('[AddEntry] Could not upload image to S3:', uploadErr?.message);
-              uploadedImages.push(img.uri); // fallback: keep local URI
-            }
+        showAlert('Saved Offline', 'Your journey is saved on your device and will sync when you are online! 📲', 'success');
+        setTimeout(() => navigation.goBack(), 1500);
+        return;
+      }
+
+      // 4. Sequential Uploads for all local images
+      const uploadedImages = [];
+      for (const img of images) {
+        if (img.isS3) {
+          uploadedImages.push(img.uri);
+        } else {
+          try {
+            // Update UI state for this specific image if needed, but we check isSaving globally
+            const s3Url = await uploadToS3(
+              img.uri,
+              `entry_${Date.now()}_${Math.random().toString(36).substr(7)}.jpg`,
+              'image/jpeg',
+              img.base64
+            );
+            uploadedImages.push(s3Url);
+          } catch (err) {
+            console.warn('[AddEntry] Sequential upload failed for an image:', err.message);
+            uploadedImages.push(img.uri); // fallback
           }
         }
+      }
 
-        const storyId = await addStory(user.id, {
-          ...storyData,
+      const userId = user.id || user.uid;
+
+      if (editingEntry) {
+        // ONLINE EDIT: update Firestore
+        await updateStory(editingEntry.id, {
+          title,
+          narrative,
+          location,
+          tags,
+          bannerImage: uploadedImages[0] || null,
+          gallery: uploadedImages.slice(1),
+          updatedAt: new Date().toISOString()
+        });
+        showAlert('Updated', 'Your changes have been saved successfully.', 'success');
+      } else {
+        // ONLINE ADD: save to Firestore
+        const storyId = await addStory(userId, {
+          title,
+          narrative,
+          location,
+          tags,
           images: uploadedImages,
+          email: user.email,
         });
 
-        console.log('[AddEntry] Story saved to Firestore:', storyId);
+        console.log('[AddEntry] Story saved directly to Firestore:', storyId);
         showAlert('Success', 'Your journey has been captured and synced to Firestore! ☁️', 'success');
       }
 
+      // 5. Navigate back ONLY after success
       setTimeout(() => navigation.goBack(), 1500);
+
+
     } catch (error) {
       // Never crash — always show a friendly error
       console.error('[AddEntry] Save failed:', error?.message || error);
@@ -291,7 +282,7 @@ const AddEntryScreen = ({ navigation, route }) => {
 
   const renderMediaItem = ({ item, drag, isActive, index }) => (
     <ScaleDecorator>
-      <TouchableOpacity 
+      <TouchableOpacity
         onLongPress={drag}
         disabled={isActive}
         style={[
@@ -305,8 +296,8 @@ const AddEntryScreen = ({ navigation, route }) => {
             <ActivityIndicator color="#FFF" size="large" />
           </View>
         )}
-        <TouchableOpacity 
-          style={styles.removeMediaButton} 
+        <TouchableOpacity
+          style={styles.removeMediaButton}
           onPress={() => removeImage(item.id)}
         >
           <MaterialCommunityIcons name="delete-outline" size={16} color="#FFF" />
@@ -322,8 +313,8 @@ const AddEntryScreen = ({ navigation, route }) => {
   );
 
   const renderAddButton = () => (
-    <TouchableOpacity 
-      style={styles.addMediaCardSmall} 
+    <TouchableOpacity
+      style={styles.addMediaCardSmall}
       onPress={pickImage}
       disabled={isUploading}
     >
@@ -350,16 +341,16 @@ const AddEntryScreen = ({ navigation, route }) => {
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <View style={[styles.modalIconContainer, { backgroundColor: alertConfig.type === 'success' ? 'rgba(80, 227, 194, 0.2)' : alertConfig.type === 'error' ? 'rgba(255, 97, 171, 0.2)' : 'rgba(123, 97, 255, 0.2)' }]}>
-              <MaterialCommunityIcons 
-                name={alertConfig.type === 'success' ? 'check-circle' : alertConfig.type === 'error' ? 'alert-circle' : 'information'} 
-                size={40} 
-                color={alertConfig.type === 'success' ? '#50E3C2' : alertConfig.type === 'error' ? '#FF61AB' : '#7B61FF'} 
+              <MaterialCommunityIcons
+                name={alertConfig.type === 'success' ? 'check-circle' : alertConfig.type === 'error' ? 'alert-circle' : 'information'}
+                size={40}
+                color={alertConfig.type === 'success' ? '#50E3C2' : alertConfig.type === 'error' ? '#FF61AB' : '#7B61FF'}
               />
             </View>
             <Text style={styles.modalTitle}>{alertConfig.title}</Text>
             <Text style={styles.modalMessage}>{alertConfig.message}</Text>
-            <TouchableOpacity 
-              style={styles.modalButton} 
+            <TouchableOpacity
+              style={styles.modalButton}
               onPress={() => {
                 setAlertConfig({ ...alertConfig, visible: false });
                 if (alertConfig.onPress) alertConfig.onPress();
@@ -372,38 +363,41 @@ const AddEntryScreen = ({ navigation, route }) => {
       </Modal>
 
       <StatusBar barStyle={isDarkMode ? "light-content" : "dark-content"} backgroundColor={theme.colors.background} />
-      
+
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()}>
           <MaterialCommunityIcons name="close" size={24} color={theme.colors.text} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>{entry ? 'Edit Journal Entry' : 'New Journal Entry'}</Text>
+        <Text style={styles.headerTitle}>{editingEntry ? 'Edit' : 'New'} Journal Entry</Text>
         <Text style={styles.brandTitle}>Journiq</Text>
       </View>
 
+
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
         {/* Visual Memories Section */}
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Visual Memories</Text>
-            <Text style={styles.sectionLimit}>DRAG TO REORDER • FIRST IS BANNER</Text>
+        {useMemo(() => (
+          <View style={styles.section}>
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>Visual Memories</Text>
+              <Text style={styles.sectionLimit}>DRAG TO REORDER • FIRST IS BANNER</Text>
+            </View>
+
+            <View style={styles.draggableContainer}>
+              <DraggableFlatList
+                data={images}
+                onDragEnd={({ data }) => setImages(data)}
+                keyExtractor={(item) => item.id}
+                renderItem={renderMediaItem}
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                containerStyle={styles.mediaScroll}
+                ListFooterComponent={renderAddButton}
+                ListFooterComponentStyle={styles.mediaFooter}
+              />
+            </View>
           </View>
-          
-          <View style={styles.draggableContainer}>
-            <DraggableFlatList
-              data={images}
-              onDragEnd={({ data }) => setImages(data)}
-              keyExtractor={(item) => item.id}
-              renderItem={renderMediaItem}
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              containerStyle={styles.mediaScroll}
-              ListFooterComponent={renderAddButton}
-              ListFooterComponentStyle={styles.mediaFooter}
-            />
-          </View>
-        </View>
+        ), [images, styles, isUploading, renderMediaItem, renderAddButton])}
 
         {/* Journey Title */}
         <View style={styles.section}>
@@ -419,32 +413,34 @@ const AddEntryScreen = ({ navigation, route }) => {
         </View>
 
         {/* Location Bar */}
-        <TouchableOpacity 
-          style={styles.locationBar} 
-          onPress={() => setIsEditingLocation(true)}
-          activeOpacity={0.7}
-        >
-          <View style={styles.locationIconContainer}>
-            <MaterialCommunityIcons name="map-marker" size={18} color={theme.colors.primary} />
-          </View>
-          <View style={styles.locationTextContainer}>
-            <Text style={styles.locationLabel}>CURRENT LOCATION</Text>
-            {isEditingLocation ? (
-              <TextInput
-                style={styles.locationInput}
-                value={location}
-                onChangeText={setLocation}
-                onBlur={() => setIsEditingLocation(false)}
-                autoFocus
-              />
-            ) : (
-              <Text style={styles.locationValue} numberOfLines={1}>{location}</Text>
-            )}
-          </View>
-          <TouchableOpacity onPress={fetchLocation}>
-            <MaterialCommunityIcons name="refresh" size={20} color={theme.colors.muted} />
+        {useMemo(() => (
+          <TouchableOpacity
+            style={styles.locationBar}
+            onPress={() => setIsEditingLocation(true)}
+            activeOpacity={0.7}
+          >
+            <View style={styles.locationIconContainer}>
+              <MaterialCommunityIcons name="map-marker" size={18} color={theme.colors.primary} />
+            </View>
+            <View style={styles.locationTextContainer}>
+              <Text style={styles.locationLabel}>CURRENT LOCATION</Text>
+              {isEditingLocation ? (
+                <TextInput
+                  style={styles.locationInput}
+                  value={location}
+                  onChangeText={setLocation}
+                  onBlur={() => setIsEditingLocation(false)}
+                  autoFocus
+                />
+              ) : (
+                <Text style={styles.locationValue} numberOfLines={1}>{location}</Text>
+              )}
+            </View>
+            <TouchableOpacity onPress={fetchLocation}>
+              <MaterialCommunityIcons name="refresh" size={20} color={theme.colors.muted} />
+            </TouchableOpacity>
           </TouchableOpacity>
-        </TouchableOpacity>
+        ), [location, isEditingLocation, styles, theme.colors.primary, theme.colors.muted, fetchLocation])}
 
         {/* The Narrative */}
         <View style={styles.section}>
@@ -458,31 +454,34 @@ const AddEntryScreen = ({ navigation, route }) => {
               onChangeText={setNarrative}
               onBlur={updateInsights}
               multiline
+              textAlignVertical="top" // Fix for Android multiline lag
             />
           </View>
         </View>
 
         {/* AI Insights */}
-        <View style={styles.section}>
-          <View style={styles.aiHeader}>
-            <MaterialCommunityIcons name="auto-fix" size={18} color={theme.colors.primary} />
-            <Text style={styles.aiTitle}>AI Insights</Text>
-            <TouchableOpacity onPress={updateInsights} style={styles.refreshAi}>
-              <MaterialCommunityIcons name="refresh" size={14} color={theme.colors.muted} />
-            </TouchableOpacity>
+        {useMemo(() => (
+          <View style={styles.section}>
+            <View style={styles.aiHeader}>
+              <MaterialCommunityIcons name="auto-fix" size={18} color={theme.colors.primary} />
+              <Text style={styles.aiTitle}>AI Insights</Text>
+              <TouchableOpacity onPress={updateInsights} style={styles.refreshAi}>
+                <MaterialCommunityIcons name="refresh" size={14} color={theme.colors.muted} />
+              </TouchableOpacity>
+            </View>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.tagScroll}>
+              {tags.map((tag, i) => (
+                <View key={i} style={[styles.aiTag, { backgroundColor: i === 0 ? 'rgba(123, 97, 255, 0.2)' : i === 1 ? 'rgba(80, 227, 194, 0.2)' : 'rgba(255, 97, 171, 0.2)' }]}>
+                  <View style={[styles.tagDot, { backgroundColor: i === 0 ? '#7B61FF' : i === 1 ? '#50E3C2' : '#FF61AB' }]} />
+                  <Text style={styles.tagText}>{tag}</Text>
+                </View>
+              ))}
+              <TouchableOpacity style={styles.addTagButton}>
+                <Text style={styles.addTagText}>+ Add Tag</Text>
+              </TouchableOpacity>
+            </ScrollView>
           </View>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.tagScroll}>
-            {tags.map((tag, i) => (
-              <View key={i} style={[styles.aiTag, { backgroundColor: i === 0 ? 'rgba(123, 97, 255, 0.2)' : i === 1 ? 'rgba(80, 227, 194, 0.2)' : 'rgba(255, 97, 171, 0.2)' }]}>
-                <View style={[styles.tagDot, { backgroundColor: i === 0 ? '#7B61FF' : i === 1 ? '#50E3C2' : '#FF61AB' }]} />
-                <Text style={styles.tagText}>{tag}</Text>
-              </View>
-            ))}
-            <TouchableOpacity style={styles.addTagButton}>
-              <Text style={styles.addTagText}>+ Add Tag</Text>
-            </TouchableOpacity>
-          </ScrollView>
-        </View>
+        ), [tags, styles, theme.colors.primary, theme.colors.muted, updateInsights])}
       </ScrollView>
 
       {/* Bottom Bar */}
@@ -490,18 +489,19 @@ const AddEntryScreen = ({ navigation, route }) => {
         <TouchableOpacity style={styles.timeButton}>
           <MaterialCommunityIcons name="clock-outline" size={24} color={theme.colors.textSecondary} />
         </TouchableOpacity>
-        <TouchableOpacity 
-          style={[styles.saveButtonGlass, isSaving && { opacity: 0.7 }]} 
+        <TouchableOpacity
+          style={[styles.saveButtonGlass, isSaving && { opacity: 0.7 }]}
           onPress={handleSave}
           disabled={isSaving}
         >
           {isSaving ? (
             <ActivityIndicator color="#FFF" />
           ) : (
-            <Text style={styles.saveButtonText}>Save Journey</Text>
+            <Text style={styles.saveButtonText}>{editingEntry ? 'Update' : 'Save'} Journey</Text>
           )}
         </TouchableOpacity>
       </View>
+
     </View>
   );
 };
@@ -691,18 +691,25 @@ const createStyles = (theme, isDarkMode) => StyleSheet.create({
   titleInput: {
     fontSize: 24,
     color: theme.colors.text,
-    fontWeight: '600',
-    padding: 0,
+    fontWeight: '800', // Making it thicker
+    padding: 16, // Adding padding for the glass effect
     lineHeight: 32,
+    backgroundColor: isDarkMode ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0,0,0,0.03)',
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(123, 97, 255, 0.2)', // Themed border
+    marginBottom: 8,
   },
   locationBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: theme.colors.surface,
+    backgroundColor: isDarkMode ? 'rgba(255, 255, 255, 0.05)' : 'rgba(255, 255, 255, 0.6)',
     padding: 16,
-    borderRadius: 20,
+    borderRadius: 22,
     marginBottom: 32,
-    ...theme.shadows.sm,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+    // ...theme.shadows.sm,
   },
   locationIconContainer: {
     width: 36,
@@ -734,11 +741,13 @@ const createStyles = (theme, isDarkMode) => StyleSheet.create({
     padding: 0,
   },
   narrativeContainer: {
-    backgroundColor: theme.colors.surface,
+    backgroundColor: isDarkMode ? 'rgba(255, 255, 255, 0.03)' : 'rgba(0,0,0,0.02)',
     borderRadius: 24,
     padding: 20,
     minHeight: 180,
-    ...theme.shadows.sm,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+    // ...theme.shadows.sm,
   },
   narrativeInput: {
     fontSize: 15,
@@ -772,6 +781,8 @@ const createStyles = (theme, isDarkMode) => StyleSheet.create({
     paddingVertical: 10,
     borderRadius: 20,
     marginRight: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.15)',
   },
   tagDot: {
     width: 6,

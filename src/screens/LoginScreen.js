@@ -11,10 +11,7 @@ const LoginScreen = ({ navigation }) => {
   const [error, setError] = useState(null);
 
   useEffect(() => {
-    GoogleSignin.configure({
-      webClientId: '62977450893-prnndp73i5hggs2bbnaplspq4r85me2r.apps.googleusercontent.com',
-      offlineAccess: true,
-    });
+    // Initializing theme or other screen-specific logic if needed
   }, []);
 
   const handleGoogleLogin = async () => {
@@ -30,6 +27,7 @@ const LoginScreen = ({ navigation }) => {
       await createUser(user);
 
       // Store in AsyncStorage for session management
+      await AsyncStorage.setItem('isLoggedIn', 'true');
       await AsyncStorage.setItem('userSession', JSON.stringify({
         name: user.name,
         email: user.email,

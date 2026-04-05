@@ -5,6 +5,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { GoogleSignin } from '@react-native-google-signin/google-signin';
 import { useNavigation, CommonActions } from '@react-navigation/native';
 import { useTheme } from '../hooks/useTheme';
+import { getUserStories } from '../services/firestoreService';
+
 
 const ProfileScreen = () => {
   const navigation = useNavigation();
@@ -17,9 +19,26 @@ const ProfileScreen = () => {
     photo: 'https://i.pravatar.cc/300'
   });
 
+  const [stats, setStats] = useState({ trips: '0', entries: '0' });
+  const [isAppLockEnabled, setIsAppLockEnabled] = useState(false);
+
   useEffect(() => {
     loadUserSession();
+    loadStats();
+    loadSecuritySettings();
   }, []);
+
+  const loadSecuritySettings = async () => {
+    const isLocked = await AsyncStorage.getItem('isAppLockEnabled');
+    setIsAppLockEnabled(isLocked === 'true');
+  };
+
+  const toggleAppLock = async () => {
+    const newState = !isAppLockEnabled;
+    setIsAppLockEnabled(newState);
+    await AsyncStorage.setItem('isAppLockEnabled', newState ? 'true' : 'false');
+  };
+
 
   const loadUserSession = async () => {
     try {
@@ -37,22 +56,69 @@ const ProfileScreen = () => {
     }
   };
 
+  const loadStats = async () => {
+    try {
+      // 🚀 OPTIMIZED: First try to load cached stats from AsyncStorage (set by HomeScreen)
+      const statsStr = await AsyncStorage.getItem('userStats');
+      if (statsStr) {
+        const cachedStats = JSON.parse(statsStr);
+        setStats({
+          trips: (cachedStats.trips || 0).toString(),
+          entries: (cachedStats.entries || 0).toString()
+        });
+        return; // Success, no need to re-fetch
+      }
+
+      const sessionStr = await AsyncStorage.getItem('userSession');
+      if (sessionStr) {
+        const session = JSON.parse(sessionStr);
+        const userId = session.id || session.uid;
+        if (userId) {
+          const stories = await getUserStories(userId);
+
+          // Calculate stats
+          const totalEntries = stories.length;
+
+          // Extract unique cities from "Country.State.City" or similar strings
+          const uniqueCities = new Set();
+          stories.forEach(story => {
+            if (story.location) {
+              const parts = story.location.split('.');
+              const city = parts[parts.length - 1]?.trim();
+              if (city) uniqueCities.add(city.toLowerCase());
+            }
+          });
+
+          setStats({
+            trips: uniqueCities.size.toString(),
+            entries: totalEntries.toString()
+          });
+        }
+      }
+    } catch (error) {
+      console.error('Error loading stats:', error);
+    }
+  };
+
+
   const handleLogout = async () => {
     Alert.alert(
       "Logout",
-      "Are you sure you want to exit your journey?",
+      "Are you sure you want to end your journey?",
       [
         { text: "Cancel", style: "cancel" },
-        { 
-          text: "Logout", 
+        {
+          text: "Logout",
           style: "destructive",
           onPress: async () => {
             try {
-              // Sign out from Google
-              await GoogleSignin.signOut();
-              // Clear session
-              await AsyncStorage.removeItem('userSession');
-              // Navigate to Auth
+              // 1. Sign out from Google
+              await GoogleSignin.signOut().catch(() => {});
+              
+              // 2. Clear ALL AsyncStorage data
+              await AsyncStorage.clear();
+              
+              // 3. Reset to Auth stack
               navigation.dispatch(
                 CommonActions.reset({
                   index: 0,
@@ -98,15 +164,19 @@ const ProfileScreen = () => {
   );
 
   return (
-    <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
+    <ScrollView 
+      style={styles.container} 
+      contentContainerStyle={styles.scrollContent}
+      showsVerticalScrollIndicator={false}
+    >
       <StatusBar barStyle={isDarkMode ? "light-content" : "dark-content"} backgroundColor={theme.colors.background} />
-      
+
       {/* User Header */}
       <View style={styles.header}>
         <View style={styles.avatarContainer}>
-          <Image 
-            source={{ uri: user.photo }} 
-            style={styles.avatar} 
+          <Image
+            source={{ uri: user.photo }}
+            style={styles.avatar}
           />
           <TouchableOpacity style={styles.editBadge}>
             <MaterialCommunityIcons name="camera-outline" size={16} color="#FFF" />
@@ -121,9 +191,10 @@ const ProfileScreen = () => {
 
       {/* Stats Row */}
       <View style={styles.statsRow}>
-        {renderStat('TRIPS TAKEN', '24')}
-        {renderStat('JOURNAL ENTRIES', '142')}
+        {renderStat('TRIPS TAKEN', stats.trips)}
+        {renderStat('JOURNAL ENTRIES', stats.entries)}
       </View>
+
 
       {/* Settings Section */}
       <View style={styles.section}>
@@ -133,13 +204,15 @@ const ProfileScreen = () => {
           <View style={styles.divider} />
           {renderSettingItem('weather-night', 'Dark Mode', 'Sync with your system appearance', true, isDarkMode, toggleTheme)}
           <View style={styles.divider} />
+          {renderSettingItem('fingerprint', 'App Lock', 'Require fingerprint to unlock Journiq', true, isAppLockEnabled, toggleAppLock)}
+          <View style={styles.divider} />
           {renderSettingItem('bell-outline', 'Notifications', 'Stay updated on trip reminders')}
         </View>
       </View>
 
       {/* Logout Action */}
-      <TouchableOpacity 
-        style={styles.logoutButton} 
+      <TouchableOpacity
+        style={styles.logoutButton}
         onPress={handleLogout}
         activeOpacity={0.8}
       >
@@ -147,8 +220,6 @@ const ProfileScreen = () => {
         <Text style={styles.logoutText}>End Session</Text>
       </TouchableOpacity>
 
-      {/* Footer */}
-      <Text style={styles.footerText}>JOURNIQ PREMIUM V2.4.0</Text>
     </ScrollView>
   );
 };
@@ -157,6 +228,9 @@ const createStyles = (theme, isDarkMode) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: theme.colors.background,
+  },
+  scrollContent: {
+    paddingBottom: 110, // Ensure content is not cut off by the tab bar
   },
   header: {
     alignItems: 'center',
@@ -303,7 +377,6 @@ const createStyles = (theme, isDarkMode) => StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(255, 77, 79, 0.25)',
     backgroundColor: isDarkMode ? 'rgba(255, 77, 79, 0.08)' : 'rgba(255, 77, 79, 0.05)',
-    ...theme.shadows.sm,
   },
   logoutText: {
     fontSize: 16,
@@ -311,13 +384,6 @@ const createStyles = (theme, isDarkMode) => StyleSheet.create({
     fontWeight: '800',
     marginLeft: 10,
     letterSpacing: 0.5,
-  },
-  footerText: {
-    textAlign: 'center',
-    fontSize: 10,
-    color: theme.colors.muted,
-    marginBottom: 100, // Extra space for tab bar
-    letterSpacing: 1,
   },
 });
 
