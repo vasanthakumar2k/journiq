@@ -16,11 +16,11 @@ const COLUMN_WIDTH = (width - 48 - (GRID_SPACING * 2)) / 3;
 const GalleryScreen = ({ navigation }) => {
   const { theme, isDarkMode } = useTheme();
   const styles = useMemo(() => createStyles(theme, isDarkMode), [theme, isDarkMode]);
-  
+
   const [stories, setStories] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isDownloading, setIsDownloading] = useState(false);
-  
+
   // Viewer state
   const [selectedImage, setSelectedImage] = useState(null);
   const [activeStory, setActiveStory] = useState(null);
@@ -62,8 +62,8 @@ const GalleryScreen = ({ navigation }) => {
   const checkPermission = async () => {
     if (Platform.OS === 'android') {
       const result = await request(
-        Platform.OS === 'android' && Platform.Version >= 33 
-          ? PERMISSIONS.ANDROID.READ_MEDIA_IMAGES 
+        Platform.OS === 'android' && Platform.Version >= 33
+          ? PERMISSIONS.ANDROID.READ_MEDIA_IMAGES
           : PERMISSIONS.ANDROID.WRITE_EXTERNAL_STORAGE
       );
       return result === RESULTS.GRANTED;
@@ -84,7 +84,7 @@ const GalleryScreen = ({ navigation }) => {
         fileCache: true,
         appendExt: 'jpg',
       }).fetch('GET', uri);
-      
+
       await CameraRoll.save(res.path(), { type: 'photo' });
       Alert.alert("Success", "Memory saved to your device gallery! 📸");
     } catch (error) {
@@ -97,7 +97,7 @@ const GalleryScreen = ({ navigation }) => {
 
   const renderStorySection = ({ item: story }) => {
     const storyImages = story.images || [story.bannerImage, ...(story.gallery || [])].filter(Boolean);
-    
+
     if (storyImages.length === 0) return null;
 
     return (
@@ -106,16 +106,22 @@ const GalleryScreen = ({ navigation }) => {
           <View style={styles.titleLine} />
           <Text style={styles.storyTitle}>{story.title}</Text>
         </View>
-        
+
         <View style={styles.imageGrid}>
           {storyImages.map((uri, index) => (
-            <TouchableOpacity 
+            <TouchableOpacity
               key={`${story.id}-${index}`}
-              style={styles.gridImageWrapper} 
+              style={styles.gridImageWrapper}
               activeOpacity={0.8}
               onPress={() => handleImagePress(uri, story)}
             >
               <Image source={{ uri }} style={styles.gridImage} />
+              <TouchableOpacity
+                style={styles.downloadGridIcon}
+                onPress={() => downloadImage(uri)}
+              >
+                <MaterialCommunityIcons name="download" size={16} color="#FFF" />
+              </TouchableOpacity>
             </TouchableOpacity>
           ))}
         </View>
@@ -126,7 +132,7 @@ const GalleryScreen = ({ navigation }) => {
   return (
     <View style={styles.container}>
       <StatusBar barStyle={isDarkMode ? "light-content" : "dark-content"} backgroundColor={theme.colors.background} />
-      
+
       <View style={styles.header}>
         <View>
           <Text style={styles.headerSubtitle}>Personal</Text>
@@ -169,8 +175,8 @@ const GalleryScreen = ({ navigation }) => {
               <Text style={styles.modalStoryTitle} numberOfLines={1}>{activeStory?.title}</Text>
               <Text style={styles.modalStoryLocation}>{activeStory?.location}</Text>
             </View>
-            <TouchableOpacity 
-              onPress={() => downloadImage(selectedImage)} 
+            <TouchableOpacity
+              onPress={() => downloadImage(selectedImage)}
               disabled={isDownloading}
               style={styles.downloadButton}
             >
@@ -194,7 +200,7 @@ const GalleryScreen = ({ navigation }) => {
               keyExtractor={(item, index) => index.toString()}
               showsHorizontalScrollIndicator={false}
               renderItem={({ item: uri }) => (
-                <TouchableOpacity 
+                <TouchableOpacity
                   onPress={() => setSelectedImage(uri)}
                   style={[styles.miniThumbWrapper, selectedImage === uri && styles.miniThumbActive]}
                 >
@@ -290,6 +296,19 @@ const createStyles = (theme, isDarkMode) => StyleSheet.create({
   gridImage: {
     width: '100%',
     height: '100%',
+  },
+  downloadGridIcon: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.2)',
   },
   loadingContainer: {
     flex: 1,

@@ -10,23 +10,29 @@ import { onSyncStatusChange, getSyncStatus, syncPendingEntries, isOnline } from 
 
 
 
-const CATEGORIES = ['All', 'Travel', 'Work', 'Food', 'Personal', 'Ideas'];
+// Note: Static CATEGORIES removed for dynamic tags from data
 
 const HomeScreen = ({ navigation }) => {
   const { theme, isDarkMode } = useTheme();
   const styles = createStyles(theme, isDarkMode);
   const [entries, setEntries] = useState([]);
+  const [filteredEntries, setFilteredEntries] = useState([]);
+  const [dynamicTags, setDynamicTags] = useState(['All']);
+  const [selectedTag, setSelectedTag] = useState('All');
   const [userName, setUserName] = useState('Explorer');
   const [userPhoto, setUserPhoto] = useState('https://i.pravatar.cc/100');
   const [dataSource, setDataSource] = useState(''); // 'firestore' | 'sqlite' | 'empty'
-  const [isSyncing, setIsSyncing] = useState(getSyncStatus());
+  const [isSyncing, setIsSyncing] = useState(false); // Global loading state
+  const [isOfflineSyncing, setIsOfflineSyncing] = useState(getSyncStatus()); // Specific offline sync flag
 
   useEffect(() => {
     const unsubscribe = onSyncStatusChange(status => {
-      setIsSyncing(status);
-      if (!status) {
-        // Refresh when sync completes
-        // fetchEntries(); // we can't easily call fetchEntries here unless we pull it out
+      setIsOfflineSyncing(status);
+      if (status === false) {
+        // Refresh when sync completes - simple trigger by changing a dummy state if needed, 
+        // or just re-firing the focus effect logic by adding it as a dependency.
+        // For now, let's just re-fetch manually if we have a way.
+        // Actually, the useFocusEffect will run again if we navigate away and back.
       }
     });
     return unsubscribe;
@@ -77,7 +83,21 @@ const HomeScreen = ({ navigation }) => {
 
 
 
+              // 🏷️ DYNAMIC TAGS: Extract all unique tags from stories
+              const tagsList = new Set(['All']);
+              normalized.forEach(item => {
+                if (item.tags) item.tags.forEach(t => tagsList.add(t));
+              });
+              const uniqueTags = Array.from(tagsList);
+              setDynamicTags(uniqueTags);
+
+              // 🚀 PERFECTION: Ensure the current filter is preserved after re-fetching
               setEntries(normalized);
+              if (selectedTag === 'All') {
+                setFilteredEntries(normalized);
+              } else {
+                setFilteredEntries(normalized.filter(e => e.tags?.includes(selectedTag)));
+              }
               setDataSource('firestore');
 
               // 📊 STATS LOGIC: Calculate trips and entries for Profile screen
@@ -109,13 +129,18 @@ const HomeScreen = ({ navigation }) => {
 
       fetchEntries();
 
-      // 🔄 AUTO-SYNC: Check for any pending offline entries and sync them
-      isOnline().then(online => {
+      // 🔄 TRIGGER OFFLINE SYNC ONLY ON HOME
+      isOnline().then(async online => {
         if (online) {
-          syncPendingEntries().catch(err => console.error('[Home] Auto-sync failed:', err));
+          const status = await AsyncStorage.getItem('oflinedata');
+          if (status === 'true') {
+            console.log('[Home] Pending offline data detected. Syncing...');
+            await syncPendingEntries();
+            fetchEntries(); // Immediate refresh after sync pass
+          }
         }
       });
-    }, [])
+    }, [selectedTag])
   );
 
   const renderHeader = () => (
@@ -123,6 +148,15 @@ const HomeScreen = ({ navigation }) => {
       <View>
         <Text style={styles.welcomeText}>Hello,</Text>
         <Text style={styles.userName}>{userName}!</Text>
+
+        {isOfflineSyncing && (
+          <View style={styles.syncContainer}>
+            <View style={styles.syncBadge}>
+              <Icon name="cloud-sync" size={14} color="#FFF" />
+              <Text style={styles.syncText}>SYNCING...</Text>
+            </View>
+          </View>
+        )}
       </View>
       <TouchableOpacity
         style={styles.profileButton}
@@ -136,6 +170,15 @@ const HomeScreen = ({ navigation }) => {
     </View>
   );
 
+  const handleTagPress = (tag) => {
+    setSelectedTag(tag);
+    if (tag === 'All') {
+      setFilteredEntries(entries);
+    } else {
+      setFilteredEntries(entries.filter(e => e.tags?.includes(tag)));
+    }
+  };
+
   const renderCategories = () => (
     <ScrollView
       horizontal
@@ -143,22 +186,26 @@ const HomeScreen = ({ navigation }) => {
       style={styles.categoryScroll}
       contentContainerStyle={styles.categoryContainer}
     >
-      {CATEGORIES.map((cat, index) => (
-        <TouchableOpacity
-          key={cat}
-          style={[
-            styles.categoryItem,
-            index === 0 ? styles.categoryItemActive : (isDarkMode ? styles.categoryItemGlass : styles.categoryItemLight)
-          ]}
-        >
-          <Text style={[
-            styles.categoryText,
-            index === 0 ? styles.categoryTextActive : (isDarkMode ? styles.categoryTextGlass : styles.categoryTextLight)
-          ]}>
-            {cat}
-          </Text>
-        </TouchableOpacity>
-      ))}
+      {dynamicTags.map((cat, index) => {
+        const isActive = selectedTag === cat;
+        return (
+          <TouchableOpacity
+            key={cat}
+            onPress={() => handleTagPress(cat)}
+            style={[
+              styles.categoryItem,
+              isActive ? styles.categoryItemActive : (isDarkMode ? styles.categoryItemGlass : styles.categoryItemLight)
+            ]}
+          >
+            <Text style={[
+              styles.categoryText,
+              isActive ? styles.categoryTextActive : (isDarkMode ? styles.categoryTextGlass : styles.categoryTextLight)
+            ]}>
+              {cat}
+            </Text>
+          </TouchableOpacity>
+        );
+      })}
     </ScrollView>
   );
 
@@ -166,7 +213,7 @@ const HomeScreen = ({ navigation }) => {
     <View style={styles.container}>
       <StatusBar barStyle={isDarkMode ? "light-content" : "dark-content"} backgroundColor={theme.colors.background} />
       <FlatList
-        data={entries}
+        data={filteredEntries}
         ListHeaderComponent={
           <>
             {renderHeader()}
@@ -235,7 +282,27 @@ const createStyles = (theme, isDarkMode) => StyleSheet.create({
     paddingBottom: 20,
     flexDirection: 'row',
     justifyContent: 'space-between',
+    alignItems: 'flex-start',
+  },
+  syncContainer: {
+    marginTop: 6,
+  },
+  syncBadge: {
+    flexDirection: 'row',
     alignItems: 'center',
+    backgroundColor: theme.colors.primary,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+    alignSelf: 'flex-start',
+    ...theme.shadows.sm,
+  },
+  syncText: {
+    color: '#FFF',
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 1,
+    marginLeft: 6,
   },
   welcomeText: {
     fontSize: theme.fonts.sizes.md,

@@ -1,19 +1,28 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useFocusEffect } from '@react-navigation/native';
-import { View, Text, StyleSheet, TextInput, FlatList, TouchableOpacity, Image, StatusBar, ScrollView, ImageBackground } from 'react-native';
+import { Modal, View, Text, StyleSheet, TextInput, FlatList, TouchableOpacity, Image, StatusBar, ScrollView, ImageBackground, Dimensions } from 'react-native';
 import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../hooks/useTheme';
 import { getAllStories } from '../services/firestoreService';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-
+const { width } = Dimensions.get('window');
 
 const SearchScreen = ({ navigation }) => {
   const { theme, isDarkMode } = useTheme();
   const styles = createStyles(theme, isDarkMode);
   const [searchQuery, setSearchQuery] = useState('');
   const [results, setResults] = useState([]);
+  const [allEntries, setAllEntries] = useState([]);
   const [userPhoto, setUserPhoto] = useState('https://i.pravatar.cc/100');
+
+  // Filtering states
+  const [activeFilter, setActiveFilter] = useState('All');
+  const [showTagModal, setShowTagModal] = useState(false);
+  const [showDateModal, setShowDateModal] = useState(false);
+  const [availableTags, setAvailableTags] = useState([]);
+  const [selectedTag, setSelectedTag] = useState(null);
+  const [selectedDate, setSelectedDate] = useState(null);
 
   useEffect(() => {
     AsyncStorage.getItem('userSession').then(s => {
@@ -28,16 +37,53 @@ const SearchScreen = ({ navigation }) => {
     try {
       const sessionStr = await AsyncStorage.getItem('userSession');
       if (!sessionStr) return;
-      
-      const firestoreData = await getAllStories();
 
-      
-      // Local filtering for the query
-      const filtered = firestoreData.filter(item => 
-        item.title?.toLowerCase().includes(query.toLowerCase()) ||
-        item.location?.toLowerCase().includes(query.toLowerCase()) ||
-        item.narrative?.toLowerCase().includes(query.toLowerCase())
-      );
+      const firestoreData = await getAllStories();
+      console.log('[Search] Raw Data Sample:', firestoreData[0]); // Logging for structure verification
+      setAllEntries(firestoreData);
+
+      // 🔍 Step 1: Text Search (Title, Location, Narrative)
+      const searchTerms = query.toLowerCase();
+      let filteredByText = firestoreData.filter(item => {
+        const title = (item.title || '').toLowerCase();
+        const location = (item.location || '').toLowerCase();
+        const narrative = (item.narrative || '').toLowerCase();
+
+        return title.includes(searchTerms) ||
+          location.includes(searchTerms) ||
+          narrative.includes(searchTerms);
+      });
+
+      // 🏷️ Step 2: Extract Contextual Tags
+      const tags = new Set();
+      filteredByText.forEach(item => {
+        if (Array.isArray(item.tags)) {
+          item.tags.forEach(t => tags.add(t));
+        }
+      });
+      setAvailableTags(Array.from(tags).sort());
+
+      // 🕒 Step 3: Combined Filtering (AND Logic)
+      let filtered = filteredByText;
+
+      // Filter by Selected Tag
+      if (selectedTag) {
+        filtered = filtered.filter(item =>
+          Array.isArray(item.tags) && item.tags.includes(selectedTag)
+        );
+      }
+
+      // Filter by Selected Date (Firestore Timestamp Comparison)
+      if (selectedDate) {
+        const targetDateString = selectedDate.toDateString();
+        filtered = filtered.filter(item => {
+          if (item.createdAt && item.createdAt.seconds) {
+            const itemTime = new Date(item.createdAt.seconds * 1000);
+            return itemTime.toDateString() === targetDateString;
+          }
+          return false;
+        });
+      }
 
       const formatted = filtered.map(story => {
         const storyImages = story.images || [story.bannerImage, ...(story.gallery || [])].filter(Boolean);
@@ -46,7 +92,9 @@ const SearchScreen = ({ navigation }) => {
           id: story.id,
           title: story.title,
           location: story.location || '',
-          date: story.createdAt?.toDate?.().toLocaleDateString() || (story.createdAt ? new Date(story.createdAt).toLocaleDateString() : 'Today'),
+          date: story.createdAt?.seconds
+            ? new Date(story.createdAt.seconds * 1000).toLocaleDateString()
+            : 'Today',
           tags: story.tags || [],
           images: storyImages,
           image: storyImages[0] || 'https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?q=80&w=2070',
@@ -57,36 +105,56 @@ const SearchScreen = ({ navigation }) => {
         };
       });
 
-
       setResults(formatted);
     } catch (error) {
       console.error("Search error:", error);
     }
-  }, []);
+  }, [selectedTag, selectedDate]);
 
+
+  useEffect(() => {
+    handleSearch(searchQuery);
+  }, [searchQuery, selectedTag, selectedDate, handleSearch]);
 
   useFocusEffect(
     useCallback(() => {
+      // Re-fetch everything on focus to ensure data is fresh
       handleSearch(searchQuery);
     }, [searchQuery, handleSearch])
   );
 
   const filters = [
-    { id: '1', label: 'All Filters', icon: 'tune-variant', active: true },
-    { id: '2', label: 'Trips', active: false },
-    { id: '3', label: 'Latest', icon: 'calendar-outline', active: false },
+    { id: 'all', label: 'All Filters', icon: 'tune-variant', active: !selectedTag && !selectedDate },
+    { id: 'tags', label: selectedTag || 'Tags', icon: 'tag-outline', active: !!selectedTag },
+    { id: 'latest', label: selectedDate ? selectedDate.toLocaleDateString() : 'Latest', icon: 'calendar-outline', active: !!selectedDate },
   ];
 
+  const handleFilterPress = (filterId) => {
+    if (filterId === 'all') {
+      setSelectedTag(null);
+      setSelectedDate(null);
+    } else if (filterId === 'tags') {
+      setShowTagModal(true);
+    } else if (filterId === 'latest') {
+      setShowDateModal(true);
+    }
+  };
+
   const renderFilterItem = ({ item }) => (
-    <TouchableOpacity 
+    <TouchableOpacity
+      onPress={() => handleFilterPress(item.id)}
       style={[
-        styles.filterChip, 
+        styles.filterChip,
         item.active ? styles.filterChipActive : (isDarkMode ? styles.filterChipGlass : styles.filterChipLight),
       ]}
     >
       {item.icon && <MaterialCommunityIcons name={item.icon} size={16} color={item.active ? "#FFF" : theme.colors.muted} style={{ marginRight: 6 }} />}
       <Text style={[styles.filterText, item.active && styles.filterTextActive]}>{item.label}</Text>
-      {item.removable && <MaterialCommunityIcons name="close" size={14} color={theme.colors.muted} style={{ marginLeft: 6 }} />}
+      {item.active && item.id !== 'all' && (
+        <TouchableOpacity onPress={() => item.id === 'tags' ? setSelectedTag(null) : setSelectedDate(null)}>
+          <MaterialCommunityIcons name="close" size={14} color="#FFF" style={{ marginLeft: 6 }} />
+        </TouchableOpacity>
+      )}
     </TouchableOpacity>
   );
 
@@ -140,12 +208,12 @@ const SearchScreen = ({ navigation }) => {
   return (
     <View style={styles.container}>
       <StatusBar barStyle={isDarkMode ? "light-content" : "dark-content"} backgroundColor={theme.colors.background} />
-      
+
       {/* Header */}
       <View style={styles.header}>
-        <View style={{ width: 24 }} /> 
+        <View style={{ width: 24 }} />
         <Text style={styles.headerTitle}>Journiq</Text>
-        <View style={{ width: 24 }} /> 
+        <View style={{ width: 24 }} />
       </View>
 
       <FlatList
@@ -183,6 +251,113 @@ const SearchScreen = ({ navigation }) => {
         }
         renderItem={renderResultItem}
       />
+
+      {/* Tag Modal */}
+      <Modal visible={showTagModal} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Select a Tag</Text>
+              <TouchableOpacity onPress={() => setShowTagModal(false)}>
+                <MaterialCommunityIcons name="close" size={24} color={theme.colors.text} />
+              </TouchableOpacity>
+            </View>
+            <ScrollView horizontal={false} contentContainerStyle={styles.tagGrid}>
+              {availableTags.map((tag) => (
+                <TouchableOpacity
+                  key={tag}
+                  style={[styles.tagPopupItem, selectedTag === tag && styles.tagPopupItemActive]}
+                  onPress={() => {
+                    setSelectedTag(tag);
+                    setShowTagModal(false);
+                  }}
+                >
+                  <Text style={[styles.tagPopupText, selectedTag === tag && styles.tagPopupTextActive]}>{tag}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Date Modal (Visual Calendar Grid) */}
+      <Modal visible={showDateModal} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <View>
+                <Text style={styles.modalTitle}>Select Date</Text>
+                <Text style={styles.modalSubtitle}>{new Date().toLocaleString('default', { month: 'long', year: 'numeric' })}</Text>
+              </View>
+              <TouchableOpacity onPress={() => setShowDateModal(false)} style={styles.modalCloseButton}>
+                <MaterialCommunityIcons name="close" size={24} color={theme.colors.text} />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.calendarContainer}>
+              <View style={styles.weekDaysRow}>
+                {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((d, i) => (
+                  <Text key={`${d}-${i}`} style={styles.weekDayText}>{d}</Text>
+                ))}
+              </View>
+              <View style={styles.calendarGrid}>
+                {(() => {
+                  const now = new Date();
+                  const firstDay = new Date(now.getFullYear(), now.getMonth(), 1).getDay();
+                  const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+                  const days = [];
+
+                  // Empty slots for days before the 1st
+                  for (let i = 0; i < firstDay; i++) {
+                    days.push(<View key={`empty-${i}`} style={styles.calendarDayCell} />);
+                  }
+
+                  // Actual days
+                  for (let d = 1; d <= daysInMonth; d++) {
+                    const date = new Date(now.getFullYear(), now.getMonth(), d);
+                    const isSelected = selectedDate?.toDateString() === date.toDateString();
+                    const isToday = new Date().toDateString() === date.toDateString();
+
+                    days.push(
+                      <TouchableOpacity
+                        key={d}
+                        style={[
+                          styles.calendarDayCell,
+                          isSelected && styles.calendarDaySelected,
+                          isToday && !isSelected && styles.calendarDayToday
+                        ]}
+                        onPress={() => {
+                          setSelectedDate(date);
+                          setShowDateModal(false);
+                        }}
+                      >
+                        <Text style={[
+                          styles.calendarDayText,
+                          isSelected && styles.calendarDayTextSelected,
+                          isToday && !isSelected && styles.calendarDayTextToday
+                        ]}>
+                          {d}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  }
+                  return days;
+                })()}
+              </View>
+            </View>
+
+            <TouchableOpacity
+              style={styles.clearDateButton}
+              onPress={() => {
+                setSelectedDate(null);
+                setShowDateModal(false);
+              }}
+            >
+              <Text style={styles.clearDateText}>Clear Selection</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 };
@@ -496,6 +671,133 @@ const createStyles = (theme, isDarkMode) => StyleSheet.create({
     color: '#FFF',
     fontSize: 14,
     fontWeight: '800',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
+  },
+  modalContent: {
+    backgroundColor: theme.colors.surface,
+    borderTopLeftRadius: 30,
+    borderTopRightRadius: 30,
+    padding: 24,
+    maxHeight: '70%',
+    ...theme.shadows.lg,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: theme.colors.text,
+  },
+  tagGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+  },
+  tagPopupItem: {
+    backgroundColor: 'rgba(123, 97, 255, 0.1)',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 15,
+    marginRight: 10,
+    marginBottom: 10,
+  },
+  tagPopupItemActive: {
+    backgroundColor: theme.colors.primary,
+  },
+  tagPopupText: {
+    fontSize: 13,
+    color: theme.colors.text,
+    fontWeight: '600',
+  },
+  tagPopupTextActive: {
+    color: '#FFF',
+  },
+  datePickerPlaceholder: {
+    paddingVertical: 20,
+  },
+  dateInfo: {
+    fontSize: 12,
+    color: theme.colors.muted,
+    marginBottom: 12,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+  },
+  modalSubtitle: {
+    fontSize: 12,
+    color: theme.colors.muted,
+    fontWeight: '600',
+    marginTop: 2,
+  },
+  modalCloseButton: {
+    padding: 4,
+  },
+  calendarContainer: {
+    marginTop: 10,
+  },
+  weekDaysRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    marginBottom: 15,
+  },
+  weekDayText: {
+    fontSize: 12,
+    color: theme.colors.muted,
+    fontWeight: '800',
+    width: 40,
+    textAlign: 'center',
+  },
+  calendarGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'flex-start',
+  },
+  calendarDayCell: {
+    width: (width - 48 - 48) / 7, // Adjusting for modal padding
+    height: 45,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginVertical: 2,
+  },
+  calendarDaySelected: {
+    backgroundColor: theme.colors.primary,
+    borderRadius: 12,
+    ...theme.shadows.sm,
+  },
+  calendarDayToday: {
+    backgroundColor: 'rgba(123, 97, 255, 0.1)',
+    borderRadius: 12,
+  },
+  calendarDayText: {
+    fontSize: 14,
+    color: theme.colors.text,
+    fontWeight: '600',
+  },
+  calendarDayTextSelected: {
+    color: '#FFF',
+    fontWeight: '800',
+  },
+  calendarDayTextToday: {
+    color: theme.colors.primary,
+    fontWeight: '700',
+  },
+  clearDateButton: {
+    marginTop: 30,
+    alignItems: 'center',
+    paddingVertical: 12,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(0,0,0,0.05)',
+  },
+  clearDateText: {
+    color: theme.colors.error,
+    fontSize: 14,
+    fontWeight: '700',
   },
 });
 

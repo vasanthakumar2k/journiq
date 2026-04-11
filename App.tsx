@@ -22,7 +22,7 @@ const App = () => {
     });
 
     // 1. Start synchronization for any existing offline data on app start
-    syncPendingEntries().catch(err => 
+    syncPendingEntries().catch(err =>
       console.error('[App] Initial sync failed:', err)
     );
 

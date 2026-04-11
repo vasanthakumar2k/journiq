@@ -6,6 +6,8 @@ import { GoogleSignin } from '@react-native-google-signin/google-signin';
 import { useNavigation, CommonActions } from '@react-navigation/native';
 import { useTheme } from '../hooks/useTheme';
 import { getUserStories } from '../services/firestoreService';
+import { useFocusEffect } from '@react-navigation/native';
+import { useCallback } from 'react';
 
 
 const ProfileScreen = () => {
@@ -27,6 +29,12 @@ const ProfileScreen = () => {
     loadStats();
     loadSecuritySettings();
   }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadUserSession();
+    }, [])
+  );
 
   const loadSecuritySettings = async () => {
     const isLocked = await AsyncStorage.getItem('isAppLockEnabled');
@@ -113,11 +121,11 @@ const ProfileScreen = () => {
           onPress: async () => {
             try {
               // 1. Sign out from Google
-              await GoogleSignin.signOut().catch(() => {});
-              
+              await GoogleSignin.signOut().catch(() => { });
+
               // 2. Clear ALL AsyncStorage data
               await AsyncStorage.clear();
-              
+
               // 3. Reset to Auth stack
               navigation.dispatch(
                 CommonActions.reset({
@@ -141,8 +149,13 @@ const ProfileScreen = () => {
     </View>
   );
 
-  const renderSettingItem = (icon, title, subtitle, showToggle = false, value = false, onToggle = null) => (
-    <TouchableOpacity style={styles.settingItem} activeOpacity={0.7} disabled={showToggle}>
+  const renderSettingItem = (icon, title, subtitle, showToggle = false, value = false, onAction = null) => (
+    <TouchableOpacity
+      style={styles.settingItem}
+      activeOpacity={0.7}
+      onPress={!showToggle ? onAction : null}
+      disabled={showToggle && !onAction}
+    >
       <View style={styles.settingIconContainer}>
         <MaterialCommunityIcons name={icon} size={24} color={theme.colors.primary} />
       </View>
@@ -153,9 +166,9 @@ const ProfileScreen = () => {
       {showToggle ? (
         <Switch
           value={value}
-          onValueChange={onToggle}
+          onValueChange={onAction}
           trackColor={{ false: '#767577', true: theme.colors.primary }}
-          thumbColor="#f4f3f4"
+          thumbColor={isDarkMode ? '#f4f3f4' : '#fff'}
         />
       ) : (
         <MaterialCommunityIcons name="chevron-right" size={24} color={theme.colors.muted} />
@@ -164,8 +177,8 @@ const ProfileScreen = () => {
   );
 
   return (
-    <ScrollView 
-      style={styles.container} 
+    <ScrollView
+      style={styles.container}
       contentContainerStyle={styles.scrollContent}
       showsVerticalScrollIndicator={false}
     >
@@ -178,9 +191,6 @@ const ProfileScreen = () => {
             source={{ uri: user.photo }}
             style={styles.avatar}
           />
-          <TouchableOpacity style={styles.editBadge}>
-            <MaterialCommunityIcons name="camera-outline" size={16} color="#FFF" />
-          </TouchableOpacity>
         </View>
         <Text style={styles.userName}>{user.name}</Text>
         <Text style={styles.userEmail}>{user.email}</Text>
@@ -200,7 +210,7 @@ const ProfileScreen = () => {
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>ACCOUNT SETTINGS</Text>
         <View style={styles.settingsCard}>
-          {renderSettingItem('account-outline', 'Personal Information', 'Update your name and profile photo')}
+          {renderSettingItem('account-outline', 'Personal Information', 'Update your name and profile photo', false, false, () => navigation.navigate('EditProfile'))}
           <View style={styles.divider} />
           {renderSettingItem('weather-night', 'Dark Mode', 'Sync with your system appearance', true, isDarkMode, toggleTheme)}
           <View style={styles.divider} />

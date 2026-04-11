@@ -6,6 +6,7 @@ import MainTabNavigator from './MainTabNavigator';
 import AddEntryScreen from '../screens/AddEntryScreen';
 import EntryDetailScreen from '../screens/EntryDetailScreen';
 import EditEntryScreen from '../screens/EditEntryScreen';
+import EditProfileScreen from '../screens/EditProfileScreen';
 
 const Stack = createNativeStackNavigator();
 
@@ -29,6 +30,10 @@ const AppNavigator = () => {
         name="EditEntry"
         component={EditEntryScreen}
         options={{ headerShown: true, title: 'Edit Entry' }}
+      />
+      <Stack.Screen
+        name="EditProfile"
+        component={EditProfileScreen}
       />
     </Stack.Navigator>
   );

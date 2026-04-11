@@ -15,7 +15,7 @@ import { generateInsights, generateTagsFromImage } from '../services/aiService';
 const AddEntryScreen = ({ navigation, route }) => {
 
   const { theme, isDarkMode } = useTheme();
-  
+
   // Memoize styles to prevent expensive StyleSheet.create calls every render
   const styles = useMemo(() => createStyles(theme, isDarkMode), [theme, isDarkMode]);
 
@@ -116,9 +116,10 @@ const AddEntryScreen = ({ navigation, route }) => {
       return;
     }
 
-    // SMALL DELAY: Important for Android lifecycle after permission grant to avoid picker closing immediately
+    // EXTRA STABILITY: Increase delay specifically for Android after permission grant
+    // to ensure the system dialog has fully closed and the Activity is ready.
     if (Platform.OS === 'android') {
-      await new Promise(resolve => setTimeout(resolve, 300));
+      await new Promise(resolve => setTimeout(resolve, 500));
     }
 
     await launchGallery();

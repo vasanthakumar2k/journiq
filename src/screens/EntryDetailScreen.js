@@ -1,9 +1,10 @@
 import React from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, StatusBar, Dimensions } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, StatusBar, Dimensions, Linking } from 'react-native';
 import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useTheme } from '../hooks/useTheme';
 import { deleteStory } from '../services/firestoreService';
-import { Alert } from 'react-native';
+import { Alert, Modal, Platform } from 'react-native';
+import { useState } from 'react';
 
 
 const { width } = Dimensions.get('window');
@@ -13,36 +14,51 @@ const EntryDetailScreen = ({ navigation, route }) => {
   const styles = createStyles(theme, isDarkMode);
   const { entry } = route.params || {};
 
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+
   const handleDelete = () => {
-    Alert.alert(
-      "Delete Journey",
-      "Are you sure you want to erase this memory forever?",
-      [
-        { text: "Cancel", style: "cancel" },
-        { 
-          text: "Delete", 
-          style: "destructive", 
-          onPress: async () => {
-            try {
-              await deleteStory(entry.id);
-              navigation.goBack();
-            } catch (err) {
-              console.error('Delete failed:', err);
-              Alert.alert('Error', 'Could not delete the journey. Please try again.');
-            }
-          }
+    setShowDeleteModal(true);
+  };
+
+  const confirmDelete = async () => {
+    try {
+      setShowDeleteModal(false);
+      await deleteStory(entry.id);
+      navigation.goBack();
+    } catch (err) {
+      console.error('Delete failed:', err);
+      Alert.alert('Error', 'Could not delete the journey. Please try again.');
+    }
+  };
+
+  const viewInMap = () => {
+    const locationStr = entry?.location || entry?.title;
+    if (locationStr) {
+      const query = encodeURIComponent(locationStr);
+      const url = Platform.select({
+        ios: `maps:0,0?q=${query}`,
+        android: `geo:0,0?q=${query}`,
+      });
+
+      Linking.canOpenURL(url).then(supported => {
+        if (supported) {
+          Linking.openURL(url);
+        } else {
+          Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${query}`);
         }
-      ]
-    );
+      });
+    } else {
+      Alert.alert('Location Missing', 'No location data found.');
+    }
   };
 
 
   const renderInfoChip = (icon, label) => {
     // 🔥 FIX: Ensure the label (like the date) is a string, not a Firestore Timestamp object
-    const displayLabel = 
+    const displayLabel =
       (label && typeof label === 'object' && label.toDate) ? label.toDate().toLocaleDateString() :
-      (label && typeof label === 'object' && label._seconds) ? new Date(label._seconds * 1000).toLocaleDateString() :
-      label?.toString() || 'Today';
+        (label && typeof label === 'object' && label._seconds) ? new Date(label._seconds * 1000).toLocaleDateString() :
+          label?.toString() || 'Today';
 
     return (
       <View style={styles.infoChip}>
@@ -59,14 +75,50 @@ const EntryDetailScreen = ({ navigation, route }) => {
 
   return (
     <View style={styles.container}>
+      {/* 🏙️ Attractive Delete Popup */}
+      <Modal
+        transparent
+        visible={showDeleteModal}
+        animationType="fade"
+        onRequestClose={() => setShowDeleteModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalIconContainer}>
+              <MaterialCommunityIcons name="alert-decagram" size={60} color="#FF61AB" />
+            </View>
+            <Text style={styles.modalTitle}>Delete Journey?</Text>
+            <Text style={styles.modalMessage}>
+              Are you sure you want to erase this memory forever? This action cannot be undone.
+            </Text>
+
+            <View style={styles.modalActionRow}>
+              <TouchableOpacity
+                style={styles.cancelButton}
+                onPress={() => setShowDeleteModal(false)}
+              >
+                <Text style={styles.cancelButtonText}>No, Keep it</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.deleteButton}
+                onPress={confirmDelete}
+              >
+                <Text style={styles.deleteButtonText}>Yes, Delete</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       <StatusBar barStyle="light-content" translucent backgroundColor="transparent" />
-      
+
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
         {/* Banner Image (First in Array) */}
         <View style={styles.imageHeader}>
-          <Image 
-            source={{ uri: entry?.images?.[0] || 'https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?q=80&w=2070' }} 
-            style={styles.headerImage} 
+          <Image
+            source={{ uri: entry?.images?.[0] || 'https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?q=80&w=2070' }}
+            style={styles.headerImage}
           />
           <View style={styles.headerOverlay}>
             <TouchableOpacity style={styles.backButtonGlass} onPress={() => navigation.goBack()}>
@@ -133,7 +185,7 @@ const EntryDetailScreen = ({ navigation, route }) => {
           )}
 
           {/* Interactive Map Button */}
-          <TouchableOpacity style={styles.mapButtonGlass}>
+          <TouchableOpacity style={styles.mapButtonGlass} onPress={viewInMap}>
             <MaterialCommunityIcons name="compass-outline" size={20} color={isDarkMode ? theme.colors.primary : theme.colors.white} style={{ marginRight: 8 }} />
             <Text style={styles.mapButtonText}>View on Interactive Map</Text>
           </TouchableOpacity>
@@ -319,6 +371,83 @@ const createStyles = (theme, isDarkMode) => StyleSheet.create({
     color: '#FFF',
     fontSize: 14,
     fontWeight: '700',
+  },
+  statsText: {
+    color: '#FFF',
+    fontSize: 12,
+    fontWeight: '700',
+    marginLeft: 6,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.75)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  modalContent: {
+    width: '100%',
+    backgroundColor: theme.colors.surface,
+    borderRadius: 30,
+    padding: 30,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+    ...theme.shadows.lg,
+  },
+  modalIconContainer: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    backgroundColor: 'rgba(255, 97, 171, 0.15)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  modalTitle: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: theme.colors.text,
+    marginBottom: 12,
+    textAlign: 'center',
+  },
+  modalMessage: {
+    fontSize: 15,
+    color: theme.colors.textSecondary,
+    textAlign: 'center',
+    lineHeight: 22,
+    marginBottom: 28,
+  },
+  modalActionRow: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  cancelButton: {
+    flex: 1,
+    height: 54,
+    borderRadius: 27,
+    backgroundColor: isDarkMode ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.05)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  cancelButtonText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: theme.colors.textSecondary,
+  },
+  deleteButton: {
+    flex: 1,
+    height: 54,
+    borderRadius: 27,
+    backgroundColor: '#FF61AB',
+    justifyContent: 'center',
+    alignItems: 'center',
+    ...theme.shadows.md,
+  },
+  deleteButtonText: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#FFF',
   },
 });
 
